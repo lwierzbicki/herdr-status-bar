@@ -4,7 +4,7 @@
 # 2) add one entry to [ui].tab_bar_right in config.toml (idempotent, backed up)
 # 3) wrap the Claude Code statusline so its stdin (incl. rate_limits) is captured
 # 4) herdr server reload-config
-# Overrides: HERDR_CONFIG_DIR, CLAUDE_SETTINGS, HERDR_BIN_PATH, AGENT_USAGE_SKIP_CLAUDE=1
+# Overrides: HERDR_CONFIG_DIR, CLAUDE_SETTINGS, HERDR_BIN_PATH
 set -eu
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -28,9 +28,7 @@ note "installed: $DEST_DIR/agent_usage.py"
 python3 -I "$SRC_DIR/tabbar.py" add "$CONFIG_DIR/config.toml"
 
 # --- Claude statusline capture wrapper (only when a statusline is configured) ---
-if [ "${AGENT_USAGE_SKIP_CLAUDE:-0}" = "1" ]; then
-    note "claude capture: skipped (AGENT_USAGE_SKIP_CLAUDE=1)"
-elif [ ! -f "$CLAUDE_SETTINGS" ]; then
+if [ ! -f "$CLAUDE_SETTINGS" ]; then
     note "claude capture: $CLAUDE_SETTINGS not found; the claude segment will be omitted"
 else
     CLAUDE_SETTINGS="$CLAUDE_SETTINGS" DEST_DIR="$DEST_DIR" STAMP="$STAMP" python3 -I - <<'PY'
@@ -52,8 +50,6 @@ wrapper = os.path.join(dest, "statusline-wrapper.sh")
 
 if isinstance(original, str) and original == wrapper:
     print("claude capture: wrapper already installed; skipped")
-elif isinstance(original, str) and ".last-statusline.json" in original:
-    print("claude capture: statusline already captures rate limits; skipped")
 elif not original:
     print("claude capture: no statusLine configured; the claude segment will be omitted")
     print("  (configure any Claude Code statusline first, then re-run install.sh)")

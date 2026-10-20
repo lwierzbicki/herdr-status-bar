@@ -18,7 +18,7 @@ Changes from upstream:
 - Codex reads only the tail of each session file instead of the whole file (on a 531 MB session log: 13 MB / 0.03 s instead of 4.8 GB / 5.5 s) and shows both the primary (5-hour) and secondary (weekly) windows; only the `codex` rate-limit family is used.
 - The installer manages a single `tab_bar_right` entry through `tabbar.py`; uninstall restores `config.toml` byte-for-byte.
 - The Claude statusline capture file and wrapper scripts are private to the user (0600/0700).
-- Output is shorter: 4-cell gauge, no timestamp.
+- Output is shorter: 4-cell gauge, no timestamp. The upstream display flags (per-provider toggles, gauge width, color, 12-hour clock) are removed; the widget takes no options.
 
 ## Data sources
 
@@ -35,10 +35,6 @@ Requires herdr >= 0.8.0 and python3 >= 3.9.
 ```
 
 `install.sh` copies `agent_usage.py` to `~/.config/herdr/agent-usage/`, adds one entry to `[ui].tab_bar_right` in `~/.config/herdr/config.toml` (300 s interval, 5 s timeout), wraps the Claude statusline, and reloads herdr. Both `config.toml` and `settings.json` are backed up as `*.bak-agent-usage-<timestamp>` before changes. `uninstall.sh` removes the entry and restores the original statusline command.
-
-## Options
-
-Edit the `command` of the tab-bar entry to add flags: `--no-claude`, `--no-codex`, `--no-gauge`, `--gauge-width N` (1-20, default 4), `--color`.
 
 ## Tests
 

@@ -8,14 +8,12 @@ Output: "claude █░░░ 12%/30% │ codex █░░░ 29%/24%"
           file tail is read, so multi-hundred-MB session logs stay cheap
 Missing or unparsable segments are omitted silently; '*' marks stale data
 (claude 6h, codex 24h).
-Flags: --no-claude --no-codex --no-gauge --gauge-width N --color
 Test overrides: CLAUDE_STATUS_FILE, CODEX_SESSIONS_DIR, NOW_EPOCH
 """
 from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
@@ -25,14 +23,7 @@ CODEX_SCAN_LIMIT = 5  # give up after this many newest session files without rat
 CODEX_TAIL_BLOCK = 256 * 1024
 CODEX_TAIL_MAX = 8 * 1024 * 1024  # never read more than this from the end of one file
 CODEX_LIMIT_IDS = (None, "codex")  # skip other limit families (e.g. "premium")
-
-BRAND_RGB = {
-    "claude": (217, 119, 87),
-    "codex": (16, 163, 127),
-}
-
-gauge_cells = 4
-show_gauge = True
+GAUGE_CELLS = 4
 
 
 def now() -> float:
@@ -49,19 +40,17 @@ def pct(value) -> str:
 
 
 def gauge(value) -> str:
-    """Fill N cells proportionally; any non-zero value fills at least one."""
+    """Fill GAUGE_CELLS proportionally; any non-zero value fills at least one."""
     clamped = min(100, max(0, value or 0))
-    filled = 0 if clamped <= 0 else min(gauge_cells, max(1, round(clamped / 100 * gauge_cells)))
-    return "█" * filled + "░" * (gauge_cells - filled)
+    filled = 0 if clamped <= 0 else min(GAUGE_CELLS, max(1, round(clamped / 100 * GAUGE_CELLS)))
+    return "█" * filled + "░" * (GAUGE_CELLS - filled)
 
 
 def segment(label: str, short, long, stale: bool) -> str | None:
     if short is None and long is None:
         return None
-    tail = f"{pct(short)}/{pct(long)}{'*' if stale else ''}"
-    if not show_gauge:
-        return f"{label} {tail}"
-    return f"{label} {gauge(short if short is not None else long)} {tail}"
+    gauge_value = short if short is not None else long
+    return f"{label} {gauge(gauge_value)} {pct(short)}/{pct(long)}{'*' if stale else ''}"
 
 
 # ---------- claude ----------
@@ -149,29 +138,7 @@ def codex_segment() -> str | None:
 
 
 def main() -> None:
-    global gauge_cells, show_gauge
-    argv = sys.argv[1:]
-    show_gauge = "--no-gauge" not in argv
-    if "--gauge-width" in argv:
-        idx = argv.index("--gauge-width")
-        try:
-            gauge_cells = max(1, min(20, int(argv[idx + 1])))
-        except (IndexError, ValueError):
-            pass
-    color = "--color" in argv
-
-    named = []
-    if "--no-claude" not in argv:
-        named.append(("claude", claude_segment()))
-    if "--no-codex" not in argv:
-        named.append(("codex", codex_segment()))
-
-    parts = []
-    for name, text in named:
-        if text:
-            r, g, b = BRAND_RGB[name]
-            parts.append(f"\x1b[38;2;{r};{g};{b}m{text}\x1b[0m" if color else text)
-    print(" │ ".join(parts))
+    print(" │ ".join(text for text in (claude_segment(), codex_segment()) if text))
 
 
 if __name__ == "__main__":

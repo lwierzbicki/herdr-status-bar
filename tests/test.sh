@@ -39,48 +39,42 @@ out=$(run)
 out=$(NOW=$T1 run)
 [ "$out" = "claude █░░░ 12%/30%* │ codex █░░░ 29%/24%*" ] || fail "stale: got '$out'"; ok
 
-# 3) per-provider disable, empty output when nothing is available
-[ "$(run --no-claude)" = "codex █░░░ 29%/24%" ] || fail "--no-claude"; ok
-[ "$(run --no-codex)" = "claude █░░░ 12%/30%" ] || fail "--no-codex"; ok
+# 3) a provider without data is omitted; empty output when nothing is available
+[ "$(CSF=$DIR/none.json run)" = "codex █░░░ 29%/24%" ] || fail "claude missing"; ok
+[ "$(CSD=$DIR/none run)" = "claude █░░░ 12%/30%" ] || fail "codex missing"; ok
 [ "$(CSF=$DIR/none.json CSD=$DIR/none run)" = "" ] || fail "no sources should print an empty line"; ok
 
-# 4) gauge options and color
-[ "$(run --no-gauge --no-claude)" = "codex 29%/24%" ] || fail "--no-gauge"; ok
-[ "$(run --gauge-width 10 --no-claude)" = "codex ███░░░░░░░ 29%/24%" ] || fail "--gauge-width"; ok
-out=$(run --color --no-claude)
-[ "$out" = $'\e[38;2;16;163;127mcodex █░░░ 29%/24%\e[0m' ] || fail "--color: got '$out'"; ok
-
-# 5) missing secondary renders as '-'
+# 4) missing secondary renders as '-'
 mkdir -p "$DIR/s2"
 printf '%s\n' '{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":40.0},"secondary":null}}}' > "$DIR/s2/r.jsonl"
-[ "$(CSD=$DIR/s2 run --no-claude)" = "codex ██░░ 40%/-" ] || fail "missing secondary"; ok
+[ "$(CSF=$DIR/none.json CSD=$DIR/s2 run)" = "codex ██░░ 40%/-" ] || fail "missing secondary"; ok
 
-# 6) rate_limits several tail blocks back, plus a line straddling a block boundary
+# 5) rate_limits several tail blocks back, plus a line straddling a block boundary
 mkdir -p "$DIR/s3"
 { codex_line 55 44; filler 20; printf 'y%.0s' $(seq 1 1000); echo; } > "$DIR/s3/r.jsonl"
-[ "$(CSD=$DIR/s3 run --no-claude)" = "codex ██░░ 55%/44%" ] || fail "rate_limits beyond first tail block"; ok
+[ "$(CSF=$DIR/none.json CSD=$DIR/s3 run)" = "codex ██░░ 55%/44%" ] || fail "rate_limits beyond first tail block"; ok
 
-# 7) newest file has no rate_limits in range -> falls back to an older file
+# 6) newest file has no rate_limits in range -> falls back to an older file
 mkdir -p "$DIR/s4"
 codex_line 7 3 > "$DIR/s4/old.jsonl"; touch -d '1 hour ago' "$DIR/s4/old.jsonl"
 filler 2 > "$DIR/s4/new.jsonl"
-[ "$(CSD=$DIR/s4 run --no-claude)" = "codex █░░░ 7%/3%" ] || fail "fallback to older session file"; ok
+[ "$(CSF=$DIR/none.json CSD=$DIR/s4 run)" = "codex █░░░ 7%/3%" ] || fail "fallback to older session file"; ok
 
-# 8) memory/time stay bounded on a huge session file (only the tail is read)
+# 7) memory/time stay bounded on a huge session file (only the tail is read)
 mkdir -p "$DIR/s5"
 { filler 3000; codex_line 29 24; } > "$DIR/s5/huge.jsonl"   # ~190 MiB
 res=$(python3 - "$SCRIPT" "$DIR/s5" <<'PY'
 import os, resource, subprocess, sys, time
 env = dict(os.environ, CODEX_SESSIONS_DIR=sys.argv[2], CLAUDE_STATUS_FILE="/nonexistent")
 t = time.time()
-out = subprocess.run([sys.argv[1], "--no-claude", "--no-gauge"], env=env, capture_output=True, text=True).stdout
+out = subprocess.run([sys.argv[1]], env=env, capture_output=True, text=True).stdout
 rss_mb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // 1024
 print(out.strip(), rss_mb < 100, time.time() - t < 1.0)
 PY
 )
-[ "$res" = "codex 29%/24% True True" ] || fail "huge file: got '$res' (want output, rss<100MB, <1s)"; ok
+[ "$res" = "codex █░░░ 29%/24% True True" ] || fail "huge file: got '$res' (want output, rss<100MB, <1s)"; ok
 
-# 9) installer: adds one tab-bar entry, preserves other entries, wraps statusline; idempotent
+# 8) installer: adds one tab-bar entry, preserves other entries, wraps statusline; idempotent
 CFG="$DIR/herdr"; mkdir -p "$CFG"
 cat > "$CFG/config.toml" <<'EOF'
 onboarding = false
@@ -108,7 +102,7 @@ python3 -c 'import sys, tomllib; d = tomllib.load(open(sys.argv[1], "rb")); asse
 cmd=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["statusLine"]["command"])' "$DIR/settings.json")
 [ "$cmd" = "$CFG/agent-usage/statusline-wrapper.sh" ] || fail "statusline not wrapped: $cmd"; ok
 
-# 10) wrapper captures stdin privately and still runs the original command
+# 9) wrapper captures stdin privately and still runs the original command
 cat > "$CFG/agent-usage/statusline-original.sh" <<'EOF'
 #!/bin/sh
 cat >/dev/null; echo rendered
@@ -117,13 +111,13 @@ out=$(echo '{"rate_limits":{}}' | HOME="$DIR/home" "$CFG/agent-usage/statusline-
 [ "$out" = "rendered" ] || fail "wrapper did not run original: '$out'"; ok
 [ "$(stat -c %a "$DIR/home/.claude/.last-statusline.json")" = "600" ] || fail "capture file should be 0600"; ok
 
-# 11) uninstall restores both files' content and removes the install dir
+# 10) uninstall restores both files' content and removes the install dir
 inst uninstall.sh
 cmp -s "$CFG/config.toml" "$DIR/config.orig" || { diff "$DIR/config.orig" "$CFG/config.toml"; fail "config.toml not restored"; }; ok
 python3 -c 'import json, sys; a, b = (json.load(open(p)) for p in sys.argv[1:]); assert a == b, (a, b)' "$DIR/settings.json" "$DIR/settings.orig" || fail "settings not restored"; ok
 [ ! -e "$CFG/agent-usage" ] || fail "install dir left behind"; ok
 
-# 12) install into a config with [ui] but no tab_bar_right, then uninstall leaves no empty array
+# 11) install into a config with [ui] but no tab_bar_right, then uninstall leaves no empty array
 cat > "$CFG/config.toml" <<'EOF'
 [ui]
 status_indicators = "symbols"
