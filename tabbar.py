@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 MARKER = "~/.config/herdr/agent-usage/agent_usage.py"
-ENTRY = '{ type = "command", command = "%s", interval_seconds = 300, timeout_seconds = 5 }' % MARKER
+ENTRY = '{ type = "command", command = "%s", interval_seconds = 60, timeout_seconds = 5 }' % MARKER
 ENTRY_LINE = re.compile(r"\n[ \t]*\{[^\n]*" + re.escape(MARKER) + r"[^\n]*\},?[ \t]*(?=\n)")
 KEY = re.compile(r"^tab_bar_right\s*=\s*\[", re.M)
 

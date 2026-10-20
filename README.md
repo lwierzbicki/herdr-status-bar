@@ -22,7 +22,7 @@ Requires herdr >= 0.8.0 and python3 >= 3.9.
 ./uninstall.sh
 ```
 
-`install.sh` copies `agent_usage.py` to `~/.config/herdr/agent-usage/`, adds one entry to `[ui].tab_bar_right` in `~/.config/herdr/config.toml` (300 s interval, 5 s timeout), wraps the Claude statusline, and reloads herdr. Both `config.toml` and `settings.json` are backed up as `*.bak-agent-usage-<timestamp>` before changes. `uninstall.sh` removes the entry and restores the original statusline command.
+`install.sh` copies `agent_usage.py` to `~/.config/herdr/agent-usage/`, adds one entry to `[ui].tab_bar_right` in `~/.config/herdr/config.toml` (60 s interval, 5 s timeout), wraps the Claude statusline, and reloads herdr. Both `config.toml` and `settings.json` are backed up as `*.bak-agent-usage-<timestamp>` before changes. `uninstall.sh` removes the entry and restores the original statusline command.
 
 ## Tests
 
