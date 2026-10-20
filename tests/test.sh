@@ -12,7 +12,7 @@ ok() { pass=$((pass + 1)); }
 mtime() { python3 -c 'import os, sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$1"; }
 
 codex_line() {  # $1 primary %, $2 secondary %, $3 limit_id
-  printf '{"timestamp":"2026-10-20T10:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"%s","primary":{"used_percent":%s,"window_minutes":300,"resets_at":1789095156},"secondary":{"used_percent":%s,"window_minutes":10080,"resets_at":1789695156},"plan_type":"plus"}}}\n' "${3:-codex}" "$1" "$2"
+  printf '{"timestamp":"2026-10-20T10:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"%s","primary":{"used_percent":%s,"window_minutes":300,"resets_at":9999999156},"secondary":{"used_percent":%s,"window_minutes":10080,"resets_at":9999999656},"plan_type":"plus"}}}\n' "${3:-codex}" "$1" "$2"
 }
 filler() {  # $1 = number of ~64 KiB lines without rate_limits
   python3 -c 'import sys
@@ -22,7 +22,7 @@ for i in range(int(sys.argv[1])):
 }
 
 cat > "$DIR/statusline.json" <<'EOF'
-{"rate_limits":{"five_hour":{"used_percentage":12.4,"resets_at":1789000000},"seven_day":{"used_percentage":30.0,"resets_at":1789100000}}}
+{"rate_limits":{"five_hour":{"used_percentage":12.4,"resets_at":9999999000},"seven_day":{"used_percentage":30.0,"resets_at":9999999100}}}
 EOF
 mkdir -p "$DIR/sessions/2026/10/20"
 { codex_line 10 5; codex_line 29 24; codex_line 99 99 premium; } > "$DIR/sessions/2026/10/20/rollout-a.jsonl"
@@ -43,6 +43,17 @@ out=$(NOW=$T1 run)
 [ "$(CSF=$DIR/none.json run)" = "codex █░░░ 29%/24%" ] || fail "claude missing"; ok
 [ "$(CSD=$DIR/none run)" = "claude █░░░ 12%/30%" ] || fail "codex missing"; ok
 [ "$(CSF=$DIR/none.json CSD=$DIR/none run)" = "" ] || fail "no sources should print an empty line"; ok
+
+# 3b) the gauge tracks only the 5-hour window; a missing 5-hour value leaves it empty
+printf '%s\n' '{"rate_limits":{"seven_day":{"used_percentage":95,"resets_at":9999999999}}}' > "$DIR/no5h.json"
+[ "$(CSF=$DIR/no5h.json CSD=$DIR/none run)" = "claude ░░░░ -/95%" ] || fail "missing 5h must not fill the gauge from weekly"; ok
+
+# 3c) a window whose resets_at has passed counts as 0% (data captured before the reset)
+printf '%s\n' '{"rate_limits":{"five_hour":{"used_percentage":80,"resets_at":1000},"seven_day":{"used_percentage":40,"resets_at":9999999999}}}' > "$DIR/reset.json"
+[ "$(CSF=$DIR/reset.json CSD=$DIR/none run)" = "claude ░░░░ 0%/40%" ] || fail "claude expired 5h window should read 0%"; ok
+mkdir -p "$DIR/s6"
+printf '%s\n' '{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":75.0,"window_minutes":300,"resets_at":1000},"secondary":{"used_percent":31.0,"window_minutes":10080,"resets_at":1001}}}}' > "$DIR/s6/r.jsonl"
+[ "$(CSF=$DIR/none.json CSD=$DIR/s6 run)" = "codex ░░░░ 0%/0%" ] || fail "codex expired windows should read 0%"; ok
 
 # 4) missing secondary renders as '-'
 mkdir -p "$DIR/s2"

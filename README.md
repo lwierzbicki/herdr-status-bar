@@ -6,7 +6,7 @@ Claude Code and Codex plan-limit usage in the [herdr](https://herdr.dev) tab bar
 claude █░░░ 31%/94% │ codex ██░░ 47%/27%
 ```
 
-Each segment is 5-hour / weekly used percent; the gauge tracks the 5-hour window. `*` after a value means stale data (Claude older than 6 h, Codex older than 24 h). A provider with no data is omitted.
+Each segment is 5-hour / weekly used percent; the gauge tracks only the 5-hour window. A window whose reset time has passed shows 0%, even before the agent reports fresh numbers. `*` after a value means stale data (Claude older than 6 h, Codex older than 24 h). A provider with no data is omitted.
 
 ## Data sources
 

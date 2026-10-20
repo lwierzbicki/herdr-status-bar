@@ -46,11 +46,22 @@ def gauge(value) -> str:
     return "█" * filled + "░" * (GAUGE_CELLS - filled)
 
 
+def used(window, key: str) -> float | None:
+    """Used percent of one limit window; 0 once its resets_at has passed (captured pre-reset)."""
+    if not isinstance(window, dict):
+        return None
+    value = number(window.get(key))
+    resets_at = number(window.get("resets_at"))
+    if value is not None and resets_at is not None and now() >= resets_at:
+        return 0
+    return value
+
+
 def segment(label: str, short, long, stale: bool) -> str | None:
+    """The gauge tracks only the 5-hour window, so a missing value never borrows the weekly one."""
     if short is None and long is None:
         return None
-    gauge_value = short if short is not None else long
-    return f"{label} {gauge(gauge_value)} {pct(short)}/{pct(long)}{'*' if stale else ''}"
+    return f"{label} {gauge(short)} {pct(short)}/{pct(long)}{'*' if stale else ''}"
 
 
 # ---------- claude ----------
@@ -65,8 +76,8 @@ def claude_segment() -> str | None:
     limits = data.get("rate_limits") if isinstance(data, dict) else None
     if not isinstance(limits, dict):
         return None
-    five_hour = number((limits.get("five_hour") or {}).get("used_percentage"))
-    seven_day = number((limits.get("seven_day") or {}).get("used_percentage"))
+    five_hour = used(limits.get("five_hour"), "used_percentage")
+    seven_day = used(limits.get("seven_day"), "used_percentage")
     return segment("claude", five_hour, seven_day, now() - mtime > CLAUDE_STALE_SECS)
 
 
@@ -131,8 +142,8 @@ def codex_segment() -> str | None:
             continue
         if limits is None:
             continue
-        primary = number((limits.get("primary") or {}).get("used_percent"))
-        secondary = number((limits.get("secondary") or {}).get("used_percent"))
+        primary = used(limits.get("primary"), "used_percent")
+        secondary = used(limits.get("secondary"), "used_percent")
         return segment("codex", primary, secondary, now() - mtime > CODEX_STALE_SECS)
     return None
 
