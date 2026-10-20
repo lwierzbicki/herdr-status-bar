@@ -8,18 +8,6 @@ claude █░░░ 31%/94% │ codex ██░░ 47%/27%
 
 Each segment is 5-hour / weekly used percent; the gauge tracks the 5-hour window. `*` after a value means stale data (Claude older than 6 h, Codex older than 24 h). A provider with no data is omitted.
 
-## Origin and license
-
-herdr-status-bar is derived from [speardragon/herdr-status-ui-bar](https://github.com/speardragon/herdr-status-ui-bar) (MIT, Copyright (c) 2026 speardragon), forked from upstream v0.8.0 at commit `34b509d`. It remains under the MIT License; see [LICENSE](LICENSE), which keeps the upstream copyright notice alongside ours.
-
-Changes from upstream:
-
-- Removed the Grok, Cursor, Droid and Antigravity providers (and with them all network access and credential reads), the weather and focused-pane widgets, the customize popup and the `layout.toml` layout system.
-- Codex reads only the tail of each session file instead of the whole file (on a 531 MB session log: 13 MB / 0.03 s instead of 4.8 GB / 5.5 s) and shows both the primary (5-hour) and secondary (weekly) windows; only the `codex` rate-limit family is used.
-- The installer manages a single `tab_bar_right` entry through `tabbar.py`; uninstall restores `config.toml` byte-for-byte.
-- The Claude statusline capture file and wrapper scripts are private to the user (0600/0700).
-- Output is shorter: 4-cell gauge, no timestamp. The upstream display flags (per-provider toggles, gauge width, color, 12-hour clock) are removed; the widget takes no options.
-
 ## Data sources
 
 - **Claude:** Claude Code passes `rate_limits` to the statusline command on stdin. `install.sh` wraps your existing `statusLine.command` with `statusline-wrapper.sh`, which saves that stdin to `~/.claude/.last-statusline.json` and then runs your original command unchanged. Without a configured statusline the Claude segment is omitted.
@@ -43,3 +31,15 @@ bash tests/test.sh
 ```
 
 Fixture-only: widget formatting, staleness, tail reading across block boundaries, bounded memory on a ~190 MiB session file, and install/uninstall round-trips on temporary configs.
+
+## Origin and license
+
+herdr-status-bar is derived from [speardragon/herdr-status-ui-bar](https://github.com/speardragon/herdr-status-ui-bar) (MIT, Copyright (c) 2026 speardragon), forked from upstream v0.8.0 at commit `34b509d`. It remains under the MIT License; see [LICENSE](LICENSE), which keeps the upstream copyright notice alongside ours.
+
+Changes from upstream:
+
+- Removed the Grok, Cursor, Droid and Antigravity providers (and with them all network access and credential reads), the weather and focused-pane widgets, the customize popup and the `layout.toml` layout system.
+- Codex reads only the tail of each session file instead of the whole file (on a 531 MB session log: 13 MB / 0.03 s instead of 4.8 GB / 5.5 s) and shows both the primary (5-hour) and secondary (weekly) windows; only the `codex` rate-limit family is used.
+- The installer manages a single `tab_bar_right` entry through `tabbar.py`; uninstall restores `config.toml` byte-for-byte.
+- The Claude statusline capture file and wrapper scripts are private to the user (0600/0700).
+- Output is shorter: 4-cell gauge, no timestamp. The upstream display flags (per-provider toggles, gauge width, color, 12-hour clock) are removed; the widget takes no options.
