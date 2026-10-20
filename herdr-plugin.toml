@@ -1,0 +1,16 @@
+id = "lwierzbicki.herdr-status-bar"
+name = "herdr-status-bar"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Claude Code / Codex plan-usage gauges in the herdr tab bar (local files only)"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "install"
+title = "Install herdr-status-bar tab-bar widget"
+command = ["./install.sh"]
+
+[[actions]]
+id = "uninstall"
+title = "Uninstall herdr-status-bar tab-bar widget"
+command = ["./uninstall.sh"]
