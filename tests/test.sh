@@ -121,6 +121,12 @@ EOF
 out=$(echo '{"rate_limits":{}}' | HOME="$DIR/home" "$CFG/agent-usage/statusline-wrapper.sh")
 [ "$out" = "rendered" ] || fail "wrapper did not run original: '$out'"; ok
 [ "$(stat -c %a "$DIR/home/.claude/.last-statusline.json")" = "600" ] || fail "capture file should be 0600"; ok
+# a fresh session (/clear) renders before its first API response, without rate_limits:
+# keep the previous capture instead of blanking the claude segment
+out=$(echo '{"session_id":"new"}' | HOME="$DIR/home" "$CFG/agent-usage/statusline-wrapper.sh")
+[ "$out" = "rendered" ] || fail "wrapper did not run original without rate_limits: '$out'"; ok
+grep -q '"rate_limits"' "$DIR/home/.claude/.last-statusline.json" || fail "capture without rate_limits overwrote the previous one"; ok
+[ -z "$(find "$DIR/home/.claude" -name '.last-statusline.json.*')" ] || fail "wrapper left a temp file behind"; ok
 
 # 10) uninstall restores both files' content and removes the install dir
 inst uninstall.sh

@@ -12,7 +12,7 @@ Each segment is 5-hour / weekly; the gauge tracks only the 5-hour window. A wind
 
 ## Data sources
 
-- **Claude:** Claude Code passes `rate_limits` to the statusline command on stdin. `install.sh` wraps your existing `statusLine.command` with `statusline-wrapper.sh`, which saves that stdin to `~/.claude/.last-statusline.json` and then runs your original command unchanged. Without a configured statusline the Claude segment is omitted.
+- **Claude:** Claude Code passes `rate_limits` to the statusline command on stdin. `install.sh` wraps your existing `statusLine.command` with `statusline-wrapper.sh`, which saves that stdin to `~/.claude/.last-statusline.json` and then runs your original command unchanged. A render without `rate_limits` (a new session after `/clear`, before its first API response) keeps the previous capture. Without a configured statusline the Claude segment is omitted.
 - **Codex:** the last `rate_limits` event (`limit_id` `codex`) in the newest of `~/.codex/sessions/**/*.jsonl`, `primary` / `secondary` windows. Only the file tail is read (up to 8 MiB, newest 5 files), so very large session logs stay cheap.
 
 ## Install

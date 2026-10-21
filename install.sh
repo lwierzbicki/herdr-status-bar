@@ -47,21 +47,12 @@ except ValueError:
 status = settings.get("statusLine") or {}
 original = status.get("command")
 wrapper = os.path.join(dest, "statusline-wrapper.sh")
+orig_sh = os.path.join(dest, "statusline-original.sh")
 
-if isinstance(original, str) and original == wrapper:
-    print("claude capture: wrapper already installed; skipped")
-elif not original:
-    print("claude capture: no statusLine configured; the claude segment will be omitted")
-    print("  (configure any Claude Code statusline first, then re-run install.sh)")
-else:
-    with open(os.path.join(dest, "statusline-original.json"), "w") as f:
-        json.dump({"command": original}, f, ensure_ascii=False)
 
-    orig_sh = os.path.join(dest, "statusline-original.sh")
-    with open(orig_sh, "w") as f:
-        f.write("#!/bin/sh\n" + original + "\n")
-    os.chmod(orig_sh, 0o700)
-
+def write_wrapper():
+    # A new session (/clear) renders before its first API response, without rate_limits;
+    # publishing that would blank the claude segment until the next response.
     with open(wrapper, "w") as f:
         f.write(
             "#!/bin/sh\n"
@@ -72,9 +63,26 @@ else:
             'tmp="$t.$$"\n'
             'cat > "$tmp"\n'
             f'{shlex.quote(orig_sh)} < "$tmp"\n'
-            'mv -f "$tmp" "$t"\n'
+            'if grep -q \'"rate_limits": *{\' "$tmp"; then mv -f "$tmp" "$t"; else rm -f "$tmp"; fi\n'
         )
     os.chmod(wrapper, 0o700)
+
+
+if isinstance(original, str) and original == wrapper:
+    write_wrapper()
+    print("claude capture: wrapper already installed; refreshed")
+elif not original:
+    print("claude capture: no statusLine configured; the claude segment will be omitted")
+    print("  (configure any Claude Code statusline first, then re-run install.sh)")
+else:
+    with open(os.path.join(dest, "statusline-original.json"), "w") as f:
+        json.dump({"command": original}, f, ensure_ascii=False)
+
+    with open(orig_sh, "w") as f:
+        f.write("#!/bin/sh\n" + original + "\n")
+    os.chmod(orig_sh, 0o700)
+
+    write_wrapper()
 
     shutil.copy2(settings_path, f"{settings_path}.bak-agent-usage-{os.environ['STAMP']}")
     new_settings = {**settings, "statusLine": {**status, "command": wrapper}}
