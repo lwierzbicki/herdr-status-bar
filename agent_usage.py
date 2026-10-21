@@ -3,12 +3,13 @@
 
 Output: "claude █░░░ 12%/30% │ codex █░░░ 29%/24%"
         (5-hour/weekly used %; the gauge tracks the 5-hour window)
-- claude: statusline capture (~/.claude/.last-statusline.json) written by statusline-wrapper.sh
+- claude: per-session statusline captures (~/.claude/.agent-usage/<session>.json) written by
+          statusline-wrapper.sh, merged per window across concurrent sessions
 - codex:  last rate_limits event in the newest ~/.codex/sessions/**/*.jsonl; only the
           file tail is read, so multi-hundred-MB session logs stay cheap
 Missing or unparsable segments are omitted silently; '*' marks stale data
 (claude 6h, codex 24h).
-Test overrides: CLAUDE_STATUS_FILE, CODEX_SESSIONS_DIR, NOW_EPOCH
+Test overrides: CLAUDE_STATUS_DIR, CODEX_SESSIONS_DIR, NOW_EPOCH
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import time
 from pathlib import Path
 
 CLAUDE_STALE_SECS = 6 * 3600
+CLAUDE_SAME_WINDOW_SECS = 3600  # resets_at values this close belong to the same limit window
 CODEX_STALE_SECS = 24 * 3600
 CODEX_SCAN_LIMIT = 5  # give up after this many newest session files without rate_limits
 CODEX_TAIL_BLOCK = 256 * 1024
@@ -66,19 +68,41 @@ def segment(label: str, short, long, stale: bool) -> str | None:
 
 # ---------- claude ----------
 
+def latest_window(windows) -> dict | None:
+    """Merge one window across sessions: the newest window wins; within one window
+    (resets_at within CLAUDE_SAME_WINDOW_SECS) the highest usage wins, since usage only grows."""
+    best = None
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        value, resets_at = number(window.get("used_percentage")), number(window.get("resets_at"))
+        if value is None or resets_at is None:
+            continue
+        if best is None or resets_at > best[1] + CLAUDE_SAME_WINDOW_SECS \
+                or (abs(resets_at - best[1]) <= CLAUDE_SAME_WINDOW_SECS and value > best[0]):
+            best = (value, resets_at)
+    return None if best is None else {"used_percentage": best[0], "resets_at": best[1]}
+
+
 def claude_segment() -> str | None:
-    path = Path(os.environ.get("CLAUDE_STATUS_FILE") or Path.home() / ".claude/.last-statusline.json")
-    try:
-        data = json.loads(path.read_text())
-        mtime = path.stat().st_mtime
-    except (OSError, ValueError):
+    """Every Claude session writes its own capture; an idle session's numbers lag, so merge them all."""
+    root = Path(os.environ.get("CLAUDE_STATUS_DIR") or Path.home() / ".claude/.agent-usage")
+    captures, newest = [], 0.0
+    for path in root.glob("*.json"):
+        try:
+            data = json.loads(path.read_text())
+            mtime = path.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        limits = data.get("rate_limits") if isinstance(data, dict) else None
+        if isinstance(limits, dict):
+            captures.append(limits)
+            newest = max(newest, mtime)
+    if not captures:
         return None
-    limits = data.get("rate_limits") if isinstance(data, dict) else None
-    if not isinstance(limits, dict):
-        return None
-    five_hour = used(limits.get("five_hour"), "used_percentage")
-    seven_day = used(limits.get("seven_day"), "used_percentage")
-    return segment("claude", five_hour, seven_day, now() - mtime > CLAUDE_STALE_SECS)
+    five_hour = used(latest_window(c.get("five_hour") for c in captures), "used_percentage")
+    seven_day = used(latest_window(c.get("seven_day") for c in captures), "used_percentage")
+    return segment("claude", five_hour, seven_day, now() - newest > CLAUDE_STALE_SECS)
 
 
 # ---------- codex ----------

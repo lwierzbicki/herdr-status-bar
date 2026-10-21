@@ -51,19 +51,22 @@ orig_sh = os.path.join(dest, "statusline-original.sh")
 
 
 def write_wrapper():
-    # A new session (/clear) renders before its first API response, without rate_limits;
-    # publishing that would blank the claude segment until the next response.
+    # One capture per session: concurrent sessions would otherwise overwrite each other, and
+    # an idle one carries stale numbers. A new session (/clear) renders before its first API
+    # response, without rate_limits; that is not published. Captures idle >7 days are pruned.
     with open(wrapper, "w") as f:
         f.write(
             "#!/bin/sh\n"
-            "# agent-usage: capture statusline stdin (private per-process tmp, publish after render)\n"
+            "# agent-usage: capture statusline stdin per session (private tmp, publish after render)\n"
             "umask 077\n"
-            'mkdir -p "$HOME/.claude"\n'
-            't="$HOME/.claude/.last-statusline.json"\n'
-            'tmp="$t.$$"\n'
+            'd="$HOME/.claude/.agent-usage"\n'
+            'mkdir -p "$d"\n'
+            'tmp="$d/.tmp.$$"\n'
             'cat > "$tmp"\n'
             f'{shlex.quote(orig_sh)} < "$tmp"\n'
-            'if grep -q \'"rate_limits": *{\' "$tmp"; then mv -f "$tmp" "$t"; else rm -f "$tmp"; fi\n'
+            'id=$(grep -o \'"session_id": *"[A-Za-z0-9_-]*"\' "$tmp" | head -n 1 | sed \'s/.*"\\([A-Za-z0-9_-]*\\)"$/\\1/\')\n'
+            'if [ -n "$id" ] && grep -q \'"rate_limits": *{\' "$tmp"; then mv -f "$tmp" "$d/$id.json"; else rm -f "$tmp"; fi\n'
+            'find "$d" -name \'*.json\' -mtime +7 -delete 2>/dev/null\n'
         )
     os.chmod(wrapper, 0o700)
 

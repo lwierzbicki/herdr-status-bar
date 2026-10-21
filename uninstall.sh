@@ -46,4 +46,4 @@ rmdir "$DEST_DIR" 2>/dev/null && note "removed: $DEST_DIR" || note "kept: $DEST_
 
 HERDR="${HERDR_BIN_PATH:-herdr}"
 "$HERDR" server reload-config >/dev/null 2>&1 && note "herdr: config reloaded" || note "herdr: restart to apply"
-note "done. (~/.claude/.last-statusline.json and *.bak-agent-usage-* backups are left in place)"
+note "done. (~/.claude/.agent-usage/ captures and *.bak-agent-usage-* backups are left in place)"
