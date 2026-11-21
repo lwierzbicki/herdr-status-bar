@@ -64,11 +64,3 @@ Fixture-only: widget formatting, staleness, tail reading across block boundaries
 ## Origin and license
 
 herdr-status-bar is derived from [speardragon/herdr-status-ui-bar](https://github.com/speardragon/herdr-status-ui-bar) (MIT, Copyright (c) 2026 speardragon), forked from upstream v0.8.0 at commit `34b509d`. It remains under the MIT License; see [LICENSE](LICENSE), which keeps the upstream copyright notice alongside ours.
-
-Changes from upstream:
-
-- Removed the Cursor, Droid and Antigravity providers, the weather and focused-pane widgets, the customize popup and the `layout.toml` layout system. Grok is a cached billing call, not the upstream curl-and-popup path. OpenCode Go and z.ai are cached usage calls. All four are toggled, with Claude and Codex, in `agent-usage.toml`.
-- Codex reads only the tail of each session file instead of the whole file (on a 531 MB session log: 13 MB / 0.03 s instead of 4.8 GB / 5.5 s) and shows both the primary (5-hour) and secondary (weekly) windows; only the `codex` rate-limit family is used.
-- The installer manages a single `tab_bar_right` entry through `tabbar.py`; uninstall restores `config.toml` byte-for-byte.
-- The Claude statusline capture file and wrapper scripts are private to the user (0600/0700).
-- Output is numbers only, no gauge and no timestamp, so five providers fit the tab row. Gauge width, color, and the 12-hour clock are not options. Providers are toggled in `agent-usage.toml`, not by command-line flags.
