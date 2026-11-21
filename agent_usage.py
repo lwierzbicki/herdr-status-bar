@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""herdr tab-bar widget: Claude Code / Codex / Grok / OpenCode Go plan-limit usage.
+"""herdr tab-bar widget: Claude Code / Codex / Grok / OpenCode Go / z.ai plan-limit usage.
 
-Output: "claude █░░░ 12%/30% │ codex █░░░ 29%/24% │ grok ██░░ 50%/- │ go ██░░ 40%/75%"
-        (5-hour/weekly used %; the gauge tracks the 5-hour window; grok credits are one window)
+Output: "claude 12%/30% │ codex 29%/24% │ grok 50%/- │ go 40%/75% │ zai 12%/40%"
+        (5-hour/weekly used %; grok credits are one window)
 - claude: per-session statusline captures (~/.claude/.agent-usage/<session>.json) written by
           statusline-wrapper.sh, merged per window across concurrent sessions
 - codex:  last rate_limits event in the newest ~/.codex/sessions/**/*.jsonl; only the
           file tail is read, so multi-hundred-MB session logs stay cheap
 - grok:   CLI billing call. Token from ~/.grok/auth.json, else OpenCode's xai OAuth entry
 - go:     OpenCode Go usage call with the opencode-go key; 5-hour/weekly
+- zai:    z.ai Coding Plan quota call with the zai-coding-plan key; 5-hour/weekly
 Quota calls are cached 5 minutes (percents only, 0600) and refresh in parallel.
 Missing or unparsable segments are omitted silently; '*' marks stale data
 (claude 6h, codex 24h, quota cache 6h).
 Providers are toggled in ~/.config/herdr/agent-usage.toml (missing key = on).
 Test overrides: CLAUDE_STATUS_DIR, CODEX_SESSIONS_DIR, NOW_EPOCH, AGENT_USAGE_CONFIG,
                 GROK_AUTH_FILE, OPENCODE_AUTH_FILE, QUOTA_CACHE_FILE,
-                GROK_FETCH_CMD, OPENCODE_GO_FETCH_CMD, GROK_BILLING_URL, OPENCODE_GO_USAGE_URL
+                GROK_FETCH_CMD, OPENCODE_GO_FETCH_CMD, ZAI_FETCH_CMD,
+                GROK_BILLING_URL, OPENCODE_GO_USAGE_URL, ZAI_QUOTA_URL
 """
 from __future__ import annotations
 
@@ -37,8 +39,7 @@ CODEX_SCAN_LIMIT = 5  # give up after this many newest session files without rat
 CODEX_TAIL_BLOCK = 256 * 1024
 CODEX_TAIL_MAX = 8 * 1024 * 1024  # never read more than this from the end of one file
 CODEX_LIMIT_IDS = (None, "codex")  # skip other limit families (e.g. "premium")
-GAUGE_CELLS = 4
-PROVIDERS = ("claude", "codex", "grok", "opencode_go")
+PROVIDERS = ("claude", "codex", "grok", "opencode_go", "zai")
 QUOTA_FRESH_SECS = 5 * 60
 QUOTA_STALE_SECS = 6 * 3600
 QUOTA_TIMEOUT_SECS = 2
@@ -46,6 +47,7 @@ QUOTA_MAX_BYTES = 64 * 1024
 _CACHE_LOCK = threading.Lock()
 GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
+ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit"
 
 
 def now() -> float:
@@ -59,13 +61,6 @@ def number(value) -> float | None:
 
 def pct(value) -> str:
     return "-" if value is None else f"{round(min(100, max(0, value)))}%"
-
-
-def gauge(value) -> str:
-    """Fill GAUGE_CELLS proportionally; any non-zero value fills at least one."""
-    clamped = min(100, max(0, value or 0))
-    filled = 0 if clamped <= 0 else min(GAUGE_CELLS, max(1, round(clamped / 100 * GAUGE_CELLS)))
-    return "█" * filled + "░" * (GAUGE_CELLS - filled)
 
 
 def used(window, key: str) -> float | None:
@@ -98,10 +93,10 @@ def enabled() -> dict[str, bool]:
 
 
 def segment(label: str, short, long, stale: bool) -> str | None:
-    """The gauge tracks only the 5-hour window, so a missing value never borrows the weekly one."""
+    """Numbers only. A 4-cell gauge made five providers longer than the tab row, and herdr cuts the end."""
     if short is None and long is None:
         return None
-    return f"{label} {gauge(short)} {pct(short)}/{pct(long)}{'*' if stale else ''}"
+    return f"{label} {pct(short)}/{pct(long)}{'*' if stale else ''}"
 
 
 # ---------- claude ----------
@@ -494,6 +489,83 @@ def opencode_go_segment() -> str | None:
     return segment("go", shown_short, shown_long, False)
 
 
+# ---------- z.ai ----------
+
+def zai_token() -> str | None:
+    entry = (opencode_auth() or {}).get("zai-coding-plan")
+    token = entry.get("key") if isinstance(entry, dict) else None
+    return token if isinstance(token, str) and token else None
+
+
+def zai_percent(limit) -> float | None:
+    usage = number(limit.get("usage"))
+    current = number(limit.get("currentValue"))
+    reported = number(limit.get("percentage"))
+    if usage is not None and usage > 0 and current is not None:
+        computed = current / usage * 100
+        if computed > 0 and round(min(100, computed)) == 0:
+            return reported if reported is not None and reported > 0 else 1
+        return computed
+    return reported
+
+
+def zai_reset(limit) -> float | None:
+    value = number(limit.get("nextResetTime"))
+    if value is None:
+        return None
+    if value > 10**12:
+        value /= 1000
+    return value
+
+
+def zai_windows(payload):
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        return None
+    data = payload.get("data")
+    limits = data.get("limits") if isinstance(data, dict) else None
+    if not isinstance(limits, list):
+        return None
+    short = long = short_resets = long_resets = None
+    for raw in limits:
+        if not isinstance(raw, dict) or raw.get("type") not in ("CREDIT_LIMIT", "TOKENS_LIMIT"):
+            continue
+        slot = {(3, 5): "short", (6, 1): "long"}.get((raw.get("unit"), raw.get("number")))
+        percent = zai_percent(raw)
+        if slot == "short" and short is None and percent is not None:
+            short, short_resets = percent, zai_reset(raw)
+        elif slot == "long" and long is None and percent is not None:
+            long, long_resets = percent, zai_reset(raw)
+    if short is None and long is None:
+        return None
+    return short, long, short_resets, long_resets
+
+
+def zai_fetch():
+    if os.environ.get("ZAI_FETCH_CMD"):
+        return fetch_cmd("ZAI_FETCH_CMD")
+    token = zai_token()
+    if not token:
+        return None
+    return http_get(os.environ.get("ZAI_QUOTA_URL") or ZAI_QUOTA_URL, {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    })
+
+
+def zai_segment() -> str | None:
+    cached = fresh_quota("zai")
+    if cached is not None:
+        return cached_segment("zai", cached)
+    parsed = zai_windows(zai_fetch())
+    if parsed is None:
+        return cached_segment("zai", read_quota("zai"))
+    short, long, short_resets, long_resets = parsed
+    write_quota("zai", short, long, short_resets, long_resets)
+    shown_short = used({"used_percentage": short, "resets_at": short_resets}, "used_percentage")
+    shown_long = used({"used_percentage": long, "resets_at": long_resets}, "used_percentage")
+    return segment("zai", shown_short, shown_long, False)
+
+
 def main() -> None:
     flags = enabled()
     parts = []
@@ -506,6 +578,8 @@ def main() -> None:
         quota.append(grok_segment)
     if flags["opencode_go"]:
         quota.append(opencode_go_segment)
+    if flags["zai"]:
+        quota.append(zai_segment)
     if len(quota) > 1:
         with ThreadPoolExecutor(max_workers=len(quota)) as pool:
             parts.extend(pool.map(lambda fn: fn(), quota))
