@@ -2,7 +2,7 @@ id = "lwierzbicki.herdr-status-bar"
 name = "herdr-status-bar"
 version = "0.1.0"
 min_herdr_version = "0.8.0"
-description = "Claude Code / Codex plan-usage gauges in the herdr tab bar (local files only)"
+description = "Claude Code / Codex / Grok / OpenCode Go plan-usage gauges in the herdr tab bar"
 platforms = ["macos", "linux"]
 
 [[actions]]

@@ -30,7 +30,14 @@ mkdir -p "$DIR/sessions/2026/10/20"
 
 T0=$(mtime "$DIR/claude/a.json")
 T1=$((T0 + 90000))  # +25h: past both stale thresholds
-run() { env NOW_EPOCH="${NOW:-$T0}" CLAUDE_STATUS_DIR="${CSF:-$DIR/claude}" CODEX_SESSIONS_DIR="${CSD:-$DIR/sessions}" "$SCRIPT" "$@"; }
+run() { # auth, config, and quota cache point at the fixture dir so a real login cannot leak in
+  env NOW_EPOCH="${NOW:-$T0}" CLAUDE_STATUS_DIR="${CSF:-$DIR/claude}" CODEX_SESSIONS_DIR="${CSD:-$DIR/sessions}" \
+    AGENT_USAGE_CONFIG="${AUC:-$DIR/no-config.toml}" GROK_AUTH_FILE="${GAF:-$DIR/no-grok-auth.json}" \
+    OPENCODE_AUTH_FILE="${OAF:-$DIR/no-oc-auth.json}" QUOTA_CACHE_FILE="${QCF:-$DIR/quota-cache.json}" \
+    GROK_FETCH_CMD="${GFC-}" OPENCODE_GO_FETCH_CMD="${OFC-}" \
+    GROK_BILLING_URL="${GBU-}" OPENCODE_GO_USAGE_URL="${OGU-}" \
+    "$SCRIPT" "$@"
+}
 
 # 1) both providers, 4-cell gauge, no timestamp; codex shows primary/secondary from the newest codex-limit line, ignores other limit_ids
 out=$(run)
@@ -88,7 +95,11 @@ mkdir -p "$DIR/s5"
 { filler 3000; codex_line 29 24; } > "$DIR/s5/huge.jsonl"   # ~190 MiB
 res=$(python3 - "$SCRIPT" "$DIR/s5" <<'PY'
 import os, resource, subprocess, sys, time
-env = dict(os.environ, CODEX_SESSIONS_DIR=sys.argv[2], CLAUDE_STATUS_DIR="/nonexistent")
+env = dict(os.environ, CODEX_SESSIONS_DIR=sys.argv[2], CLAUDE_STATUS_DIR="/nonexistent",
+              GROK_AUTH_FILE="/nonexistent", OPENCODE_AUTH_FILE="/nonexistent",
+              AGENT_USAGE_CONFIG="/nonexistent", QUOTA_CACHE_FILE="/nonexistent",
+              GROK_FETCH_CMD="", OPENCODE_GO_FETCH_CMD="",
+              GROK_BILLING_URL="", OPENCODE_GO_USAGE_URL="")
 t = time.time()
 out = subprocess.run([sys.argv[1]], env=env, capture_output=True, text=True).stdout
 rss_mb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // 1024
@@ -166,5 +177,160 @@ inst install.sh
 python3 -c 'import sys, tomllib; d = tomllib.load(open(sys.argv[1], "rb")); assert len(d["ui"]["tab_bar_right"]) == 1 and d["theme"]["name"] == "catppuccin", d' "$CFG/config.toml" || fail "insert under [ui]"; ok
 inst uninstall.sh
 cmp -s "$CFG/config.toml" "$DIR/config.orig" || { diff "$DIR/config.orig" "$CFG/config.toml"; fail "empty array not removed on uninstall"; }; ok
+
+# 12) a provider set false in the config is omitted even when it has data
+printf 'claude = false\n' > "$DIR/providers.toml"
+out=$(AUC="$DIR/providers.toml" run)
+[ "$out" = "codex █░░░ 29%/24%" ] || fail "disabled claude: got '$out'"; ok
+
+# 13) grok credits are one window; the gauge tracks that percent
+printf '%s\n' '{"config":{"creditUsagePercent":50,"key":"super-secret-token"}}' > "$DIR/grok.json"
+out=$(CSF=$DIR/none CSD=$DIR/none GFC="cat $DIR/grok.json" QCF="$DIR/quota-cache.json" run)
+[ "$out" = "grok ██░░ 50%/-" ] || fail "grok: got '$out'"; ok
+[ "$(stat -c %a "$DIR/quota-cache.json")" = "600" ] || fail "quota cache should be 0600"; ok
+grep -q super-secret-token "$DIR/quota-cache.json" && fail "quota cache stored a token"; ok
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["grok"]; assert d["short"]==50 and d["long"] is None and "key" not in d' "$DIR/quota-cache.json" || fail "quota cache shape"; ok
+
+# 14) a failed refresh shows the last cache; * only after 6h
+python3 -c 'import json,sys; json.dump({"grok":{"short":50,"long":None,"short_resets_at":None,"long_resets_at":None,"fetched_at":float(sys.argv[1])}}, open(sys.argv[2],"w"))' "$((T0 - 7 * 3600))" "$DIR/stale-cache.json"
+out=$(CSF=$DIR/none CSD=$DIR/none QCF="$DIR/stale-cache.json" GFC="" run)
+[ "$out" = "grok ██░░ 50%/-*" ] || fail "stale grok cache: got '$out'"; ok
+
+# 16) grok billing sends the token as a header, never in the URL or the cache
+python3 - "$DIR" <<'PY' &
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+root = sys.argv[1]
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+    def do_GET(self):
+        json.dump({
+            "path": self.path,
+            "authorization": self.headers.get("Authorization"),
+            "xai": self.headers.get("x-xai-token-auth"),
+        }, open(root + "/grok-request.json", "w"))
+        body = b'{"config":{"creditUsagePercent":50}}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+    def log_message(self, *args):
+        return
+server = HTTPServer(("127.0.0.1", 0), Handler)
+server.timeout = 0.2
+open(root + "/grok-port", "w").write(str(server.server_address[1]))
+deadline = __import__("time").time() + 8
+while __import__("time").time() < deadline and not __import__("os").path.exists(root + "/grok-request.json"):
+    server.handle_request()
+PY
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$DIR/grok-port" ] && break; sleep 0.05; done
+sleep 0.1
+python3 -c 'import json,sys; json.dump({"https://auth.x.ai::cli":{"key":"super-secret-token","expires_at":9999999999}}, open(sys.argv[1],"w"))' "$DIR/grok-auth.json"
+out=$(CSF=$DIR/none CSD=$DIR/none GAF="$DIR/grok-auth.json" GBU="http://127.0.0.1:$(cat "$DIR/grok-port")/v1/billing?format=credits" QCF="$DIR/grok-http-cache.json" GFC="" run)
+[ "$out" = "grok ██░░ 50%/-" ] || fail "grok http: got '$out'"; ok
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["authorization"]=="Bearer super-secret-token", d; assert "super-secret-token" not in d["path"]; assert d["xai"]=="xai-grok-cli"' "$DIR/grok-request.json" || fail "grok request"; ok
+grep -q super-secret-token "$DIR/grok-http-cache.json" && fail "http cache stored the token"; ok
+
+# 17) opencode go shows 5-hour/weekly and ignores the monthly window
+printf '%s\n' '{"usage":{"rolling":{"usedPercent":40},"weekly":{"usedPercent":75},"monthly":{"usedPercent":99},"key":"super-secret-token"}}' > "$DIR/go.json"
+out=$(CSF=$DIR/none CSD=$DIR/none OFC="cat $DIR/go.json" QCF="$DIR/go-cache.json" run)
+[ "$out" = "go ██░░ 40%/75%" ] || fail "opencode go: got '$out'"; ok
+grep -q super-secret-token "$DIR/go-cache.json" && fail "go cache stored a token"; ok
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["opencode_go"]; assert d["short"]==40 and d["long"]==75' "$DIR/go-cache.json" || fail "go cache shape"; ok
+
+# 18) opencode go usage call sends the key as a bearer header, not in the URL or cache
+python3 - "$DIR" <<'PY' &
+import json, os, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+root = __import__("sys").argv[1]
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+    def do_GET(self):
+        json.dump({
+            "path": self.path,
+            "authorization": self.headers.get("Authorization"),
+        }, open(root + "/go-request.json", "w"))
+        body = b'{"usage":{"rolling":{"usedPercent":40},"weekly":{"usedPercent":75},"monthly":{"usedPercent":99}}}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+    def log_message(self, *args):
+        return
+server = HTTPServer(("127.0.0.1", 0), Handler)
+server.timeout = 0.2
+open(root + "/go-port", "w").write(str(server.server_address[1]))
+deadline = time.time() + 8
+while time.time() < deadline and not os.path.exists(root + "/go-request.json"):
+    server.handle_request()
+PY
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$DIR/go-port" ] && break; sleep 0.05; done
+sleep 0.1
+python3 -c 'import json,sys; json.dump({"opencode-go":{"type":"api","key":"super-secret-token"}}, open(sys.argv[1],"w"))' "$DIR/go-auth.json"
+out=$(CSF=$DIR/none CSD=$DIR/none OAF="$DIR/go-auth.json" OGU="http://127.0.0.1:$(cat "$DIR/go-port")/zen/go/v1/usage" QCF="$DIR/go-http-cache.json" OFC="" run)
+[ "$out" = "go ██░░ 40%/75%" ] || fail "go http: got '$out'"; ok
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["authorization"]=="Bearer super-secret-token", d; assert "super-secret-token" not in d["path"]' "$DIR/go-request.json" || fail "go request"; ok
+grep -q super-secret-token "$DIR/go-http-cache.json" && fail "go http cache stored the token"; ok
+
+# 22) grok falls back to the OpenCode xAI OAuth token when the Grok CLI login is absent
+python3 - "$DIR" <<'PY' &
+import json, os, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+root = __import__("sys").argv[1]
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+    def do_GET(self):
+        json.dump({"authorization": self.headers.get("Authorization")}, open(root + "/xai-request.json", "w"))
+        body = b'{"config":{"creditUsagePercent":50}}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+    def log_message(self, *args):
+        return
+server = HTTPServer(("127.0.0.1", 0), Handler)
+server.timeout = 0.2
+open(root + "/xai-port", "w").write(str(server.server_address[1]))
+deadline = time.time() + 8
+while time.time() < deadline and not os.path.exists(root + "/xai-request.json"):
+    server.handle_request()
+PY
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$DIR/xai-port" ] && break; sleep 0.05; done
+sleep 0.1
+python3 -c 'import json,sys; json.dump({"xai":{"type":"oauth","access":"opencode-xai-token","refresh":"r","expires":9999999999000}}, open(sys.argv[1],"w"))' "$DIR/xai-auth.json"
+out=$(CSF=$DIR/none CSD=$DIR/none GAF="$DIR/no-grok-auth.json" OAF="$DIR/xai-auth.json" GBU="http://127.0.0.1:$(cat "$DIR/xai-port")/v1/billing?format=credits" QCF="$DIR/xai-cache.json" GFC="" run)
+[ "$out" = "grok ██░░ 50%/-" ] || fail "opencode xai grok: got '$out'"; ok
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["authorization"]=="Bearer opencode-xai-token", d' "$DIR/xai-request.json" || fail "opencode xai request"; ok
+
+# 21) a disabled quota provider is not fetched
+printf 'grok = false\nopencode_go = false\n' > "$DIR/off.toml"
+out=$(AUC="$DIR/off.toml" GFC="touch $DIR/grok-fetched-off; echo '{\"config\":{\"creditUsagePercent\":50}}'" OFC="touch $DIR/go-fetched-off; echo '{\"usage\":{\"rolling\":{\"usedPercent\":40}}}'" run)
+[ "$out" = "claude █░░░ 12%/30% │ codex █░░░ 29%/24%" ] || fail "disabled quota providers: got '$out'"; ok
+[ ! -e "$DIR/grok-fetched-off" ] && [ ! -e "$DIR/go-fetched-off" ] || fail "disabled provider was fetched"; ok
+
+# 19) a quota window whose reset has passed counts as 0%, same as claude and codex
+printf '%s\n' '{"usage":{"rolling":{"usedPercent":40,"resetsAt":1000},"weekly":{"usedPercent":75,"resetsAt":9999999999}}}' > "$DIR/go-reset.json"
+out=$(CSF=$DIR/none CSD=$DIR/none OFC="cat $DIR/go-reset.json" QCF="$DIR/go-reset-cache.json" run)
+[ "$out" = "go ░░░░ 0%/75%" ] || fail "go expired window: got '$out'"; ok
+
+# 20) grok and opencode go refresh together, so two slow calls stay inside the 5s widget timeout
+printf '%s\n' '{"config":{"creditUsagePercent":50}}' > "$DIR/slow-grok.json"
+printf '%s\n' '{"usage":{"rolling":{"usedPercent":40},"weekly":{"usedPercent":75}}}' > "$DIR/slow-go.json"
+start=$(date +%s.%N)
+out=$(CSF=$DIR/none CSD=$DIR/none QCF="$DIR/slow-cache.json" \
+  GFC="sleep 1.5; cat $DIR/slow-grok.json" OFC="sleep 1.5; cat $DIR/slow-go.json" run)
+took=$(python3 -c 'import sys; print(float(sys.argv[2]) - float(sys.argv[1]))' "$start" "$(date +%s.%N)")
+[ "$out" = "grok ██░░ 50%/- │ go ██░░ 40%/75%" ] || fail "parallel output: got '$out'"; ok
+python3 -c 'import sys; assert float(sys.argv[1]) < 2.5, sys.argv[1]' "$took" || fail "parallel took ${took}s"; ok
+
+# 15) a cache younger than 5 minutes is shown and not refetched
+python3 -c 'import json,sys; json.dump({"grok":{"short":25,"long":None,"short_resets_at":None,"long_resets_at":None,"fetched_at":float(sys.argv[1])}}, open(sys.argv[2],"w"))' "$((T0 - 60))" "$DIR/fresh-cache.json"
+printf '%s\n' '{"config":{"creditUsagePercent":90}}' > "$DIR/grok-new.json"
+out=$(CSF=$DIR/none CSD=$DIR/none QCF="$DIR/fresh-cache.json" GFC="touch $DIR/grok-fetched; cat $DIR/grok-new.json" run)
+[ "$out" = "grok █░░░ 25%/-" ] || fail "fresh grok cache: got '$out'"; ok
+[ ! -e "$DIR/grok-fetched" ] || fail "fresh cache must not refetch"; ok
 
 echo "PASS ($pass/$pass)"
