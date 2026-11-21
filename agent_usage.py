@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """herdr tab-bar widget: Claude Code / Codex / Grok / OpenCode Go / z.ai plan-limit usage.
 
-Output: "claude 12%/30% │ codex 29%/24% │ grok 50%/- │ go 40%/75% │ zai 12%/40%"
-        (5-hour/weekly used %; grok credits are one window)
+Output: "claude 12%/30% │ codex 29%/24% │ grok -/50% │ go 40%/75% │ zai 12%/40%"
+        (5-hour/weekly used %; grok credits are the weekly window only)
 - claude: per-session statusline captures (~/.claude/.agent-usage/<session>.json) written by
           statusline-wrapper.sh, merged per window across concurrent sessions
 - codex:  last rate_limits event in the newest ~/.codex/sessions/**/*.jsonl; only the
@@ -417,15 +417,26 @@ def grok_fetch():
     })
 
 
+def grok_weekly(entry: dict | None) -> dict | None:
+    if not isinstance(entry, dict) or entry.get("long") is not None or entry.get("short") is None:
+        return entry
+    moved = dict(entry)
+    moved["long"] = moved["short"]
+    moved["long_resets_at"] = moved.get("short_resets_at")
+    moved["short"] = None
+    moved["short_resets_at"] = None
+    return moved
+
+
 def grok_segment() -> str | None:
     cached = fresh_quota("grok")
     if cached is not None:
-        return cached_segment("grok", cached)
+        return cached_segment("grok", grok_weekly(cached))
     percent = grok_percent(grok_fetch())
     if percent is None:
-        return cached_segment("grok", read_quota("grok"))
-    write_quota("grok", percent, None)
-    return segment("grok", percent, None, False)
+        return cached_segment("grok", grok_weekly(read_quota("grok")))
+    write_quota("grok", None, percent)
+    return segment("grok", None, percent, False)
 
 
 # ---------- opencode go ----------

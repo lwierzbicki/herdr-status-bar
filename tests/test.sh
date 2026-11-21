@@ -183,18 +183,18 @@ printf 'claude = false\n' > "$DIR/providers.toml"
 out=$(AUC="$DIR/providers.toml" run)
 [ "$out" = "codex 29%/24%" ] || fail "disabled claude: got '$out'"; ok
 
-# 13) grok credits are one window
+# 13) grok credits are the weekly window only
 printf '%s\n' '{"config":{"creditUsagePercent":50,"key":"super-secret-token"}}' > "$DIR/grok.json"
 out=$(CSF=$DIR/none CSD=$DIR/none GFC="cat $DIR/grok.json" QCF="$DIR/quota-cache.json" run)
-[ "$out" = "grok 50%/-" ] || fail "grok: got '$out'"; ok
+[ "$out" = "grok -/50%" ] || fail "grok: got '$out'"; ok
 [ "$(stat -c %a "$DIR/quota-cache.json")" = "600" ] || fail "quota cache should be 0600"; ok
 grep -q super-secret-token "$DIR/quota-cache.json" && fail "quota cache stored a token"; ok
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["grok"]; assert d["short"]==50 and d["long"] is None and "key" not in d' "$DIR/quota-cache.json" || fail "quota cache shape"; ok
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["grok"]; assert d["short"] is None and d["long"]==50 and "key" not in d' "$DIR/quota-cache.json" || fail "quota cache shape"; ok
 
 # 14) a failed refresh shows the last cache; * only after 6h
 python3 -c 'import json,sys; json.dump({"grok":{"short":50,"long":None,"short_resets_at":None,"long_resets_at":None,"fetched_at":float(sys.argv[1])}}, open(sys.argv[2],"w"))' "$((T0 - 7 * 3600))" "$DIR/stale-cache.json"
 out=$(CSF=$DIR/none CSD=$DIR/none QCF="$DIR/stale-cache.json" GFC="" run)
-[ "$out" = "grok 50%/-*" ] || fail "stale grok cache: got '$out'"; ok
+[ "$out" = "grok -/50%*" ] || fail "stale grok cache: got '$out'"; ok
 
 # 16) grok billing sends the token as a header, never in the URL or the cache
 python3 - "$DIR" <<'PY' &
@@ -228,7 +228,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$DIR/grok-port" ] && break; sleep 0.05; 
 sleep 0.1
 python3 -c 'import json,sys; json.dump({"https://auth.x.ai::cli":{"key":"super-secret-token","expires_at":9999999999}}, open(sys.argv[1],"w"))' "$DIR/grok-auth.json"
 out=$(CSF=$DIR/none CSD=$DIR/none GAF="$DIR/grok-auth.json" GBU="http://127.0.0.1:$(cat "$DIR/grok-port")/v1/billing?format=credits" QCF="$DIR/grok-http-cache.json" GFC="" run)
-[ "$out" = "grok 50%/-" ] || fail "grok http: got '$out'"; ok
+[ "$out" = "grok -/50%" ] || fail "grok http: got '$out'"; ok
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["authorization"]=="Bearer super-secret-token", d; assert "super-secret-token" not in d["path"]; assert d["xai"]=="xai-grok-cli"' "$DIR/grok-request.json" || fail "grok request"; ok
 grep -q super-secret-token "$DIR/grok-http-cache.json" && fail "http cache stored the token"; ok
 
@@ -302,7 +302,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$DIR/xai-port" ] && break; sleep 0.05; d
 sleep 0.1
 python3 -c 'import json,sys; json.dump({"xai":{"type":"oauth","access":"opencode-xai-token","refresh":"r","expires":9999999999000}}, open(sys.argv[1],"w"))' "$DIR/xai-auth.json"
 out=$(CSF=$DIR/none CSD=$DIR/none GAF="$DIR/no-grok-auth.json" OAF="$DIR/xai-auth.json" GBU="http://127.0.0.1:$(cat "$DIR/xai-port")/v1/billing?format=credits" QCF="$DIR/xai-cache.json" GFC="" run)
-[ "$out" = "grok 50%/-" ] || fail "opencode xai grok: got '$out'"; ok
+[ "$out" = "grok -/50%" ] || fail "opencode xai grok: got '$out'"; ok
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["authorization"]=="Bearer opencode-xai-token", d' "$DIR/xai-request.json" || fail "opencode xai request"; ok
 
 # 21) a disabled quota provider is not fetched
@@ -325,14 +325,14 @@ out=$(CSF=$DIR/none CSD=$DIR/none QCF="$DIR/slow-cache.json" \
   GFC="sleep 1.5; cat $DIR/slow-grok.json" OFC="sleep 1.5; cat $DIR/slow-go.json" \
   ZFC="sleep 1.5; cat $DIR/slow-zai.json" run)
 took=$(python3 -c 'import sys; print(float(sys.argv[2]) - float(sys.argv[1]))' "$start" "$(date +%s.%N)")
-[ "$out" = "grok 50%/- │ go 40%/75% │ zai 12%/40%" ] || fail "parallel output: got '$out'"; ok
+[ "$out" = "grok -/50% │ go 40%/75% │ zai 12%/40%" ] || fail "parallel output: got '$out'"; ok
 python3 -c 'import sys; assert float(sys.argv[1]) < 2.5, sys.argv[1]' "$took" || fail "parallel took ${took}s"; ok
 
 # 15) a cache younger than 5 minutes is shown and not refetched
 python3 -c 'import json,sys; json.dump({"grok":{"short":25,"long":None,"short_resets_at":None,"long_resets_at":None,"fetched_at":float(sys.argv[1])}}, open(sys.argv[2],"w"))' "$((T0 - 60))" "$DIR/fresh-cache.json"
 printf '%s\n' '{"config":{"creditUsagePercent":90}}' > "$DIR/grok-new.json"
 out=$(CSF=$DIR/none CSD=$DIR/none QCF="$DIR/fresh-cache.json" GFC="touch $DIR/grok-fetched; cat $DIR/grok-new.json" run)
-[ "$out" = "grok 25%/-" ] || fail "fresh grok cache: got '$out'"; ok
+[ "$out" = "grok -/25%" ] || fail "fresh grok cache: got '$out'"; ok
 [ ! -e "$DIR/grok-fetched" ] || fail "fresh cache must not refetch"; ok
 
 # 23) z.ai coding plan: 5-hour/weekly from CREDIT_LIMIT windows; counts beat percentage; MCP time limit ignored
