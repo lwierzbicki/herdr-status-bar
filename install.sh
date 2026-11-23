@@ -32,7 +32,7 @@ if [ ! -f "$CLAUDE_SETTINGS" ]; then
     note "claude capture: $CLAUDE_SETTINGS not found; the claude segment will be omitted"
 else
     CLAUDE_SETTINGS="$CLAUDE_SETTINGS" DEST_DIR="$DEST_DIR" STAMP="$STAMP" python3 -I - <<'PY'
-import json, os, shlex, shutil
+import json, os, re, shlex, shutil
 
 settings_path = os.environ["CLAUDE_SETTINGS"]
 dest = os.environ["DEST_DIR"]
@@ -58,6 +58,11 @@ def write_wrapper():
         f.write(
             "#!/bin/sh\n"
             "# agent-usage: capture statusline stdin per session (private tmp, publish after render)\n"
+            'if [ -n "$HERDR_STATUSLINE_WRAPPED" ]; then\n'
+            "  exec context-mode statusline\n"
+            "fi\n"
+            "HERDR_STATUSLINE_WRAPPED=1\n"
+            "export HERDR_STATUSLINE_WRAPPED\n"
             "umask 077\n"
             'd="$HOME/.claude/.agent-usage"\n'
             'mkdir -p "$d"\n'
@@ -71,6 +76,23 @@ def write_wrapper():
     os.chmod(wrapper, 0o700)
 
 
+def unwrap_original(cmd):
+    if not isinstance(cmd, str) or "statusline-wrapper.sh" not in cmd:
+        return cmd
+    if cmd == wrapper:
+        return None
+    m = re.search(r"else\s+exec\s+(.+?);?\s*fi\s*$", cmd)
+    return m.group(1).strip() if m else None
+
+
+def write_original(cmd):
+    with open(os.path.join(dest, "statusline-original.json"), "w") as f:
+        json.dump({"command": cmd}, f, ensure_ascii=False)
+    with open(orig_sh, "w") as f:
+        f.write("#!/bin/sh\n" + cmd + "\n")
+    os.chmod(orig_sh, 0o700)
+
+
 if isinstance(original, str) and original == wrapper:
     write_wrapper()
     print("claude capture: wrapper already installed; refreshed")
@@ -78,13 +100,12 @@ elif not original:
     print("claude capture: no statusLine configured; the claude segment will be omitted")
     print("  (configure any Claude Code statusline first, then re-run install.sh)")
 else:
-    with open(os.path.join(dest, "statusline-original.json"), "w") as f:
-        json.dump({"command": original}, f, ensure_ascii=False)
+    saved = unwrap_original(original)
+    if saved is None:
+        print("claude capture: statusLine already execs the wrapper; skipped (wrapping it would fork)")
+        raise SystemExit(0)
 
-    with open(orig_sh, "w") as f:
-        f.write("#!/bin/sh\n" + original + "\n")
-    os.chmod(orig_sh, 0o700)
-
+    write_original(saved)
     write_wrapper()
 
     shutil.copy2(settings_path, f"{settings_path}.bak-agent-usage-{os.environ['STAMP']}")

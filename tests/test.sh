@@ -158,6 +158,21 @@ echo '{"session_id":"s-1","rate_limits":{}}' | HOME="$DIR/home" "$CFG/agent-usag
 [ ! -e "$CAP/s-2.json" ] || fail "old capture not pruned"; ok
 [ "$(ls -A "$CAP")" = "s-1.json" ] || fail "wrapper left extra files: $(ls -A "$CAP")"; ok
 
+# 9b) a statusLine that already execs the wrapper must not be saved as original (fork bomb)
+CFG2="$DIR/herdr2"; mkdir -p "$CFG2" "$DIR/home2"
+cat > "$CFG2/config.toml" <<'EOF'
+[ui]
+status_indicators = "symbols"
+EOF
+LOOP='if [ -x "$HOME/.config/herdr/agent-usage/statusline-wrapper.sh" ]; then exec "$HOME/.config/herdr/agent-usage/statusline-wrapper.sh"; else exec context-mode statusline; fi'
+python3 -c 'import json,sys; json.dump({"statusLine":{"type":"command","command":sys.argv[1]}}, open(sys.argv[2],"w"))' "$LOOP" "$DIR/settings-loop.json"
+env HOME="$DIR/home2" HERDR_CONFIG_DIR="$CFG2" CLAUDE_SETTINGS="$DIR/settings-loop.json" HERDR_BIN_PATH=false sh "$ROOT/install.sh" >/dev/null
+grep -q statusline-wrapper.sh "$CFG2/agent-usage/statusline-original.sh" && fail "original.sh still execs the wrapper"; ok
+grep -q 'context-mode statusline' "$CFG2/agent-usage/statusline-original.sh" || fail "expected else-exec fallback as original"; ok
+python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["command"]; assert "statusline-wrapper.sh" not in c, c' "$CFG2/agent-usage/statusline-original.json" || fail "original.json kept the recursive command"; ok
+timeout 2 env HOME="$DIR/home2" "$CFG2/agent-usage/statusline-wrapper.sh" </dev/null
+[ $? -ne 124 ] || fail "wrapper timed out (fork bomb)"; ok
+
 # 10) uninstall restores both files' content and removes the install dir
 inst uninstall.sh
 cmp -s "$CFG/config.toml" "$DIR/config.orig" || { diff "$DIR/config.orig" "$CFG/config.toml"; fail "config.toml not restored"; }; ok
